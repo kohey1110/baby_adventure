@@ -14,28 +14,40 @@
 body {
   background: #1a1a2e;
   display: flex; justify-content: center; align-items: center;
-  min-height: 100vh; overflow: hidden;
+  width: 100vw; height: 100vh; overflow: hidden;
 }
 #wrap {
-  width: 100%;
-  max-width: 800px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  display: flex; justify-content: center; align-items: center;
+  width: 100%; height: 100%;
 }
 canvas {
   display: block;
-  width: 100%;
-  height: auto;
-  max-width: 800px;
   border: 3px solid #fff3;
   border-radius: 6px;
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
 }
+#rotate {
+  display: none;
+  position: fixed; inset: 0;
+  background: #1a1a2e;
+  color: white;
+  font-family: Arial, sans-serif;
+  font-size: 22px;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  gap: 16px;
+  z-index: 999;
+  text-align: center;
+}
 </style>
 </head>
 <body>
+<div id="rotate">
+  <div style="font-size:52px">📱</div>
+  <div>スマホを横向きにしてね！</div>
+</div>
 <div id="wrap"><canvas id="c" width="800" height="450"></canvas></div>
 <script>
 const canvas = document.getElementById('c');
@@ -136,52 +148,54 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => keys[e.code] = false);
 
-// ===== TOUCH CONTROLS =====
-// Virtual button rects (in canvas coords)
-const VB = {
-  left:  { x: 18,    y: H-108, w: 82, h: 82 },
-  right: { x: 110,   y: H-108, w: 82, h: 82 },
-  jump:  { x: W-108, y: H-108, w: 100, h: 82 },
-  burp:  { x: W-220, y: H-108, w: 104, h: 82 },
-};
-const touchKeys = { left: false, right: false, jump: false };
-let touchBurpPressed = false;
-let showTouch = false;
+// ===== CANVAS FITTING =====
+function fitCanvas() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width  = Math.floor(W * scale) + 'px';
+  canvas.style.height = Math.floor(H * scale) + 'px';
+}
+function checkOrientation() {
+  const portrait = window.innerHeight > window.innerWidth;
+  document.getElementById('rotate').style.display = portrait ? 'flex' : 'none';
+  if (!portrait) fitCanvas();
+}
+window.addEventListener('resize', checkOrientation);
+window.addEventListener('orientationchange', () => setTimeout(checkOrientation, 150));
+fitCanvas();
+checkOrientation();
 
-function ptInBtn(px, py, btn) {
-  return px >= btn.x && px <= btn.x+btn.w && py >= btn.y && py <= btn.y+btn.h;
-}
-function canvasPos(touch) {
-  const r = canvas.getBoundingClientRect();
-  return {
-    x: (touch.clientX - r.left) * (W / r.width),
-    y: (touch.clientY - r.top)  * (H / r.height),
-  };
-}
-function syncTouches(e) {
-  touchKeys.left = false; touchKeys.right = false; touchKeys.jump = false;
-  for (const t of e.touches) {
-    const p = canvasPos(t);
-    if (ptInBtn(p.x, p.y, VB.left))  touchKeys.left  = true;
-    if (ptInBtn(p.x, p.y, VB.right)) touchKeys.right = true;
-    if (ptInBtn(p.x, p.y, VB.jump))  touchKeys.jump  = true;
-  }
-}
+// ===== TOUCH SWIPE CONTROLS =====
+let showTouch = false;
+let touchStartX = 0, touchStartY = 0;
+let touchJumpPressed = false;
+let touchBurpPressed = false;
+let swipeHandled = false;
+const SWIPE_DIST = 22;
+
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
   initAudio();
   showTouch = true;
-  for (const t of e.changedTouches) {
-    const p = canvasPos(t);
-    if (ptInBtn(p.x, p.y, VB.burp)) touchBurpPressed = true;
-    // Title / gameover / clear: tap anywhere to start
-    if (state !== 'playing') startGame();
-  }
-  syncTouches(e);
+  touchStartX = e.touches[0].clientX;
+  touchStartY = e.touches[0].clientY;
+  swipeHandled = false;
+  if (state !== 'playing') { startGame(); return; }
 }, { passive: false });
-canvas.addEventListener('touchmove',   e => { e.preventDefault(); syncTouches(e); }, { passive: false });
-canvas.addEventListener('touchend',    e => { e.preventDefault(); syncTouches(e); }, { passive: false });
-canvas.addEventListener('touchcancel', e => { e.preventDefault(); syncTouches(e); }, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (state !== 'playing' || swipeHandled) return;
+  const dy = e.touches[0].clientY - touchStartY;
+  const dx = e.touches[0].clientX - touchStartX;
+  if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > SWIPE_DIST) {
+    swipeHandled = true;
+    if (dy < 0) touchJumpPressed = true;   // 上スワイプ = ジャンプ
+    else        touchBurpPressed = true;   // 下スワイプ = げっぷ
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend',    e => e.preventDefault(), { passive: false });
+canvas.addEventListener('touchcancel', e => e.preventDefault(), { passive: false });
 
 let player, platforms, items, enemies, burps;
 
@@ -268,16 +282,24 @@ function update() {
   }
 
   // --- INPUT ---
-  if (keys['ArrowLeft'] || keys['KeyA'] || touchKeys.left) { p.vx = -SPEED; p.facing = -1; }
-  else if (keys['ArrowRight'] || keys['KeyD'] || touchKeys.right) { p.vx = SPEED; p.facing = 1; }
-  else p.vx *= 0.75;
-
-  const jumpDown = keys['Space'] || keys['ArrowUp'] || keys['KeyW'] || touchKeys.jump;
-  if (jumpDown && p.onGround) {
-    p.vy = JUMP; p.onGround = false; sndJump();
+  if (showTouch) {
+    // スマホ：自動で右に走る
+    p.vx = SPEED; p.facing = 1;
+  } else {
+    // PC：キーボード操作
+    if (keys['ArrowLeft'] || keys['KeyA']) { p.vx = -SPEED; p.facing = -1; }
+    else if (keys['ArrowRight'] || keys['KeyD']) { p.vx = SPEED; p.facing = 1; }
+    else p.vx *= 0.75;
   }
 
-  // Burp attack (one-shot from keyboard OR touchBurpPressed from touch)
+  // ジャンプ（キーボード or 上スワイプ）
+  const jumpDown = keys['Space'] || keys['ArrowUp'] || keys['KeyW'];
+  if ((jumpDown || touchJumpPressed) && p.onGround) {
+    p.vy = JUMP; p.onGround = false; sndJump();
+  }
+  touchJumpPressed = false; // consume
+
+  // Burp attack (keyboard one-shot or 下スワイプ)
   const burpDown = keys['KeyZ'] || keys['KeyX'] || keys['ShiftLeft'] || keys['ShiftRight'];
   const burpFired = (burpDown && !burpWasDown) || touchBurpPressed;
   touchBurpPressed = false; // consume
@@ -902,48 +924,21 @@ function drawClear() {
   ctx.textAlign='left';
 }
 
-// ===== TOUCH BUTTON DRAWING =====
-function drawTouchButtons() {
-  if (!showTouch) return;
-
-  function btn(b, label, sub, active, color) {
-    ctx.save();
-    ctx.globalAlpha = active ? 0.72 : 0.42;
-    ctx.fillStyle = active ? color : 'rgba(255,255,255,0.15)';
-    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 14); ctx.fill(); ctx.stroke();
-    ctx.globalAlpha = active ? 1 : 0.75;
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 22px Arial'; ctx.textAlign = 'center';
-    ctx.fillText(label, b.x + b.w/2, b.y + b.h/2 - 4);
-    if (sub) {
-      ctx.font = '12px Arial';
-      ctx.fillText(sub, b.x + b.w/2, b.y + b.h/2 + 14);
-    }
-    ctx.textAlign = 'left';
-    ctx.restore();
-  }
-
-  btn(VB.left,  '◀', null,    touchKeys.left,  'rgba(100,180,255,0.7)');
-  btn(VB.right, '▶', null,    touchKeys.right, 'rgba(100,180,255,0.7)');
-  btn(VB.jump,  '↑', 'ジャンプ', touchKeys.jump,  'rgba(255,200,80,0.7)');
-
-  // Burp button: highlighted green when powered, gray otherwise
-  const burpActive = player && player.powered;
+// ===== SWIPE HINT (スマホ用・最初だけ表示) =====
+let hintTimer = 300; // 約5秒表示
+function drawSwipeHint() {
+  if (hintTimer <= 0) return;
+  hintTimer--;
+  const alpha = hintTimer < 60 ? hintTimer / 60 : 1;
   ctx.save();
-  ctx.globalAlpha = burpActive ? 0.75 : 0.35;
-  ctx.fillStyle = burpActive ? 'rgba(100,200,80,0.7)' : 'rgba(255,255,255,0.12)';
-  ctx.strokeStyle = burpActive ? 'rgba(180,255,120,0.9)' : 'rgba(255,255,255,0.4)';
-  ctx.lineWidth = burpActive ? 2.5 : 1.5;
-  ctx.beginPath(); ctx.roundRect(VB.burp.x, VB.burp.y, VB.burp.w, VB.burp.h, 14);
-  ctx.fill(); ctx.stroke();
-  ctx.globalAlpha = burpActive ? 1 : 0.45;
-  ctx.fillStyle = 'white';
-  ctx.font = 'bold 18px Arial'; ctx.textAlign = 'center';
-  ctx.fillText('げっぷ', VB.burp.x + VB.burp.w/2, VB.burp.y + VB.burp.h/2 - 4);
-  ctx.font = '11px Arial';
-  ctx.fillText(burpActive ? 'タップ！' : 'ミルク必要', VB.burp.x + VB.burp.w/2, VB.burp.y + VB.burp.h/2 + 13);
+  ctx.globalAlpha = alpha * 0.72;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath(); ctx.roundRect(W/2-160, H-70, 320, 52, 10); ctx.fill();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'white'; ctx.font = 'bold 15px Arial'; ctx.textAlign = 'center';
+  ctx.fillText('↑ 上スワイプ = ジャンプ', W/2, H-45);
+  ctx.fillStyle = '#A5D6A7'; ctx.font = '13px Arial';
+  ctx.fillText('↓ 下スワイプ = げっぷ（ミルク後）', W/2, H-26);
   ctx.textAlign = 'left';
   ctx.restore();
 }
@@ -964,7 +959,7 @@ function loop() {
     drawEnemies();
     drawBaby(player);
     drawHUD();
-    drawTouchButtons();
+    if (showTouch) drawSwipeHint();
   } else if (state === 'gameover') {
     drawBg(); drawPlatforms(); drawGoal(); drawHUD(); drawGameOver();
   } else if (state === 'clear') {
